@@ -78,6 +78,6 @@ streamlit run app.py
 ### 3. How to Use
 1. **Upload Data:** Drag and drop a standard BTC `.csv` file (e.g., from Binance or Kaggle). The app will auto-detect the date format (including `Open time` / `Close time` formats) and price columns.
 2. **Configure:** Use the sidebar to select which models to train, define the forecasting horizon, and set the confidence intervals.
-3. **Execute:** Click "Generate Forecast". The app will construct the feature matrices, train the models simultaneously, execute a 1-Step Walk-Forward backtest, and generate the future projections.
-4. **Analyze:** Review the interactive Plotly chart and the detailed metrics table (MAE, RMSE, MAPE, MDA) to determine the best-performing model.
-
+3. **Train Automatically:** After upload and configuration, the app preprocesses the data, trains the selected models, and runs the backtest automatically.
+4. **Generate Forecast:** Click `Generate Forecast` to create the future projections for the selected horizon.
+5. **Analyze:** Review the interactive Plotly chart and the detailed metrics table (MAE, RMSE, MAPE, MDA) to determine the best-performing model.
