@@ -1,0 +1,17 @@
+# UI
+streamlit>=1.30.0
+plotly>=5.18.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Forecasting and ML
+scikit-learn>=1.3.0
+pmdarima>=2.0.4
+prophet>=1.1.5
+xgboost>=2.0.0
+
+# Prophet usually pulls this in automatically, but listing it here
+# makes setup a little more predictable on some machines.
+cmdstanpy>=1.2.0
