@@ -63,6 +63,7 @@ def preprocess(
     """Prepare the dataset for modeling."""
     prepared = df.copy()
 
+    # Standardize the incoming date column early so filtering and sorting behave the same across CSV formats.
     prepared[date_col] = pd.to_datetime(
         prepared[date_col],
         infer_datetime_format=True,
@@ -72,6 +73,7 @@ def preprocess(
 
     prepared = prepared.sort_values(date_col).drop_duplicates(subset=[date_col], keep="last")
 
+    # Rename to the ds / y names expected by Prophet and the rest of the pipeline.
     rename_map = {date_col: "ds", price_col: "y"}
     normalized_names = {column.lower().strip(): column for column in prepared.columns}
     for option in VOLUME_COLUMN_OPTIONS:
@@ -81,6 +83,7 @@ def preprocess(
 
     prepared = prepared.rename(columns=rename_map)
 
+    # Normalize everything to a daily timeline so different Kaggle file granularities behave the same way.
     prepared = prepared.set_index("ds")
     numeric_columns = prepared.select_dtypes(include=[np.number]).columns.tolist()
     prepared = prepared[numeric_columns]
@@ -96,6 +99,7 @@ def preprocess(
     if end_date is not None:
         prepared = prepared[prepared["ds"] <= pd.Timestamp(end_date)]
 
+    # Drop any rows that still have no target price after resampling and slicing.
     prepared = prepared.dropna(subset=["y"])
     prepared = prepared.reset_index(drop=True)
 
@@ -110,20 +114,24 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     features = df[columns].copy()
 
+    # Shift first so the model only sees information that would already be known at prediction time.
     features["lag_1"] = features["y"].shift(1)
 
     if "volume" in features.columns:
         features["volume_lag_1"] = features["volume"].shift(1)
 
+    # Short and medium windows give the model a quick trend snapshot.
     for window in [7, 30]:
         shifted_price = features["y"].shift(1)
         features[f"rolling_mean_{window}"] = shifted_price.rolling(window).mean()
         features[f"rolling_std_{window}"] = shifted_price.rolling(window).std()
 
+    # One-step return helps capture daily direction and momentum.
     features["pct_change_1"] = features["y"].shift(1).pct_change(1)
 
     shifted_price = features["y"].shift(1)
 
+    # RSI / MACD / Bollinger Bands add momentum and volatility signals beyond raw lags.
     delta = shifted_price.diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1 / 14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1 / 14, adjust=False).mean()
@@ -140,6 +148,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     features["bb_upper"] = sma_20 + (std_20 * 2)
     features["bb_lower"] = sma_20 - (std_20 * 2)
 
+    # Calendar effects can still matter even in crypto markets.
     features["day_of_week"] = features["ds"].dt.dayofweek
     features["month"] = features["ds"].dt.month
 

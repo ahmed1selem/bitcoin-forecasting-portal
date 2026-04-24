@@ -2,10 +2,15 @@
 
 from typing import Any, Dict, Tuple
 
+import pmdarima as pm
 import numpy as np
 import pandas as pd
-
 import warnings
+from prophet import Prophet
+from xgboost import XGBRegressor
+
+from data import engineer_features, get_feature_columns
+from evaluation import compute_metrics
 
 warnings.filterwarnings("ignore")
 
@@ -20,8 +25,6 @@ class ARIMAModel:
 
     def fit(self, train_df: pd.DataFrame) -> "ARIMAModel":
         """Fit the ARIMA model on the training series."""
-        import pmdarima as pm
-
         self.train_series = train_df["y"].values
 
         self.model = pm.auto_arima(
@@ -67,8 +70,6 @@ class ARIMAModel:
         confidence: float = 0.95,
     ) -> Dict[str, Any]:
         """Fit on train data, then score on the test period."""
-        from evaluation import compute_metrics
-
         self.fit(train_df)
         horizon = len(test_df)
         forecast = self.predict(horizon, confidence)
@@ -109,8 +110,6 @@ class ProphetModel:
 
     def fit(self, train_df: pd.DataFrame, confidence: float = 0.95) -> "ProphetModel":
         """Train Prophet using the expected ds/y columns."""
-        from prophet import Prophet
-
         self.model = Prophet(
             interval_width=confidence,
             daily_seasonality=False,
@@ -137,8 +136,6 @@ class ProphetModel:
         confidence: float = 0.95,
     ) -> Dict[str, Any]:
         """Fit on train data, then score on the test period."""
-        from evaluation import compute_metrics
-
         self.fit(train_df, confidence)
         horizon = len(test_df)
         forecast = self.predict(horizon, confidence)
@@ -183,23 +180,20 @@ class XGBoostModel:
 
     def _get_feature_cols(self):
         """Feature names should stay in sync with data.engineer_features."""
-        from data import get_feature_columns
-
         return get_feature_columns()
 
     def fit(self, train_feat_df: pd.DataFrame, confidence: float = 0.95) -> "XGBoostModel":
         """Train the point model and the two quantile models."""
-        from xgboost import XGBRegressor
-
         all_feature_cols = self._get_feature_cols()
         self.feature_cols = [column for column in all_feature_cols if column in train_feat_df.columns]
         alpha = (1 - confidence) / 2
 
-        # Lagged features start with NaNs, so we train only on complete rows.
+        # Train only on rows where the lagged feature set is complete.
         clean = train_feat_df.dropna(subset=self.feature_cols)
         X = clean[self.feature_cols].values
         y = np.log(clean["y"] / clean["lag_1"]).values
 
+        # Keep the trees fairly small and the learning rate moderate to reduce overfitting on one asset.
         self.model_median = XGBRegressor(
             n_estimators=500,
             max_depth=5,
@@ -213,6 +207,7 @@ class XGBoostModel:
         )
         self.model_median.fit(X, y, eval_set=[(X, y)], verbose=False)
 
+        # Lower / upper models reuse the same setup and only change the quantile target.
         self.model_lower = XGBRegressor(
             n_estimators=500,
             max_depth=5,
@@ -258,8 +253,7 @@ class XGBoostModel:
 
     def predict_recursive(self, base_df: pd.DataFrame, horizon: int) -> pd.DataFrame:
         """Forecast multiple future steps by feeding each prediction back in."""
-        from data import engineer_features
-
+        # Rebuild features after each step so the next prediction sees the updated history.
         history = base_df.copy()
         predictions = []
 
@@ -269,6 +263,7 @@ class XGBoostModel:
             feature_values = last_row[self.feature_cols].values.astype(float)
 
             if np.any(np.isnan(feature_values)):
+                # Very early rows can still miss a full feature window, so fall back to a simple carry-forward guess.
                 if predictions:
                     pred_med = predictions[-1]["yhat"]
                 else:
@@ -294,6 +289,7 @@ class XGBoostModel:
                 }
             )
 
+            # Feed the predicted point back into history so the next step uses the latest synthetic price too.
             new_row_data = {"ds": [next_date], "y": [pred_med]}
             for column in history.columns:
                 if column not in ["ds", "y"]:
@@ -312,11 +308,9 @@ class XGBoostModel:
         confidence: float = 0.95,
     ) -> Dict[str, Any]:
         """Run a one-step walk-forward style backtest on the test window."""
-        from data import engineer_features
-        from evaluation import compute_metrics
-
         self.fit(train_feat_df, confidence)
 
+        # Build the test features on the combined timeline so each test row sees the right lag history.
         full_df = pd.concat([train_df, test_df], ignore_index=True)
         full_feat = engineer_features(full_df)
         test_feat_df = full_feat.iloc[-len(test_df):].copy()
@@ -331,6 +325,7 @@ class XGBoostModel:
         pred_log_ret_lo = self.model_lower.predict(X_test)
         pred_log_ret_hi = self.model_upper.predict(X_test)
 
+        # Convert predicted returns back to price using the last real price for each row.
         last_prices = clean["lag_1"].values
         y_pred = last_prices * np.exp(pred_log_ret_med)
         y_lower = last_prices * np.exp(pred_log_ret_lo)

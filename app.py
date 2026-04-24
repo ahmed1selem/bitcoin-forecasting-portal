@@ -1,5 +1,6 @@
 """Streamlit app for comparing BTC forecasting models."""
 
+import io
 import os
 
 import pandas as pd
@@ -27,7 +28,7 @@ MODEL_COLORS_RGBA = {
 
 
 st.set_page_config(
-    page_title="₿ Bitcoin Forecasting Portal",
+    page_title="Bitcoin Forecasting Portal",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -36,7 +37,6 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    /* Dark-themed cards */
     .metric-card {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         border: 1px solid #0f3460;
@@ -59,7 +59,6 @@ st.markdown(
         margin: 8px 0 0 0;
     }
 
-    /* Winner banner */
     .winner-banner {
         background: linear-gradient(135deg, #0f3460 0%, #533483 50%, #e94560 100%);
         border-radius: 16px;
@@ -82,7 +81,6 @@ st.markdown(
         to { box-shadow: 0 0 25px rgba(233, 69, 96, 0.6); }
     }
 
-    /* Section headers */
     .section-header {
         background: linear-gradient(90deg, #e94560, #0f3460);
         -webkit-background-clip: text;
@@ -92,12 +90,10 @@ st.markdown(
         margin-top: 32px;
     }
 
-    /* Sidebar styling *
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #0a0a1a 0%, #1a1a2e 100%);
     }
 
-    /* Hide default Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
@@ -139,7 +135,7 @@ def create_plotly_layout(title: str, yaxis_title: str = "Price (USD)") -> dict:
 
 
 def add_confidence_band(fig, x_values, lower_values, upper_values, fill_color, upper_name, lower_name):
-    """Add the usual upper/lower filled band to a Plotly figure."""
+    """Add the shaded confidence band to a Plotly figure."""
     fig.add_trace(
         go.Scatter(
             x=x_values,
@@ -166,11 +162,36 @@ def add_confidence_band(fig, x_values, lower_values, upper_values, fill_color, u
     )
 
 
+def add_moving_average_traces(fig, df: pd.DataFrame, show_sma: bool, show_ema: bool, window: int):
+    """Optional moving-average overlays for chart context."""
+    if show_sma:
+        sma_values = df["y"].rolling(window=window).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=df["ds"],
+                y=sma_values,
+                mode="lines",
+                name=f"SMA ({window})",
+                line=dict(color="#7ae582", width=1.5),
+            )
+        )
+
+    if show_ema:
+        ema_values = df["y"].ewm(span=window, adjust=False).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=df["ds"],
+                y=ema_values,
+                mode="lines",
+                name=f"EMA ({window})",
+                line=dict(color="#ffa94d", width=1.5),
+            )
+        )
+
+
 @st.cache_data
 def cached_load(file_content, file_name):
     """Cache uploaded CSV content so widgets do not reload it every time."""
-    import io
-
     return load_data(io.BytesIO(file_content))
 
 
@@ -181,10 +202,10 @@ def cached_load_from_path(path):
 
 
 with st.sidebar:
-    st.markdown("## ₿ **Bitcoin Forecasting**")
+    st.markdown("## Bitcoin Forecasting")
     st.markdown("---")
 
-    st.markdown("### 📂 Data Upload")
+    st.markdown("### Data Upload")
     uploaded_file = st.file_uploader(
         "Upload BTC CSV (Kaggle format)",
         type=["csv"],
@@ -194,7 +215,7 @@ with st.sidebar:
     use_sample = False
     if os.path.exists(SAMPLE_DATA_PATH):
         use_sample = st.checkbox(
-            "📊 Use built-in sample data",
+            "Use built-in sample data",
             value=False,
             help="Load a pre-generated BTC dataset for quick demo",
         )
@@ -208,7 +229,7 @@ st.markdown(
     <h1 style="background: linear-gradient(90deg, #00d2ff, #e94560, #ffd700);
                -webkit-background-clip: text; -webkit-text-fill-color: transparent;
                font-size: 42px; font-weight: 900; margin-bottom: 4px;">
-        ₿ Bitcoin Price Forecasting Portal
+        Bitcoin Price Forecasting Portal
     </h1>
     <p style="color: #888; font-size: 16px; margin-top: 0;">
         Multi-model comparison • Interactive visualization • Research-driven analysis
@@ -229,7 +250,7 @@ if not has_data:
         st.markdown(
             """
         <div class="metric-card">
-            <h3>📊 3 Models</h3>
+            <h3>3 Models</h3>
             <p>ARIMA · Prophet · XGBoost</p>
         </div>
         """,
@@ -240,7 +261,7 @@ if not has_data:
         st.markdown(
             """
         <div class="metric-card">
-            <h3>🔬 Research-Driven</h3>
+            <h3>Research Driven</h3>
             <p>Paper-backed features</p>
         </div>
         """,
@@ -251,7 +272,7 @@ if not has_data:
         st.markdown(
             """
         <div class="metric-card">
-            <h3>🏆 Auto Comparison</h3>
+            <h3>Auto Comparison</h3>
             <p>MAE · RMSE · Winner</p>
         </div>
         """,
@@ -260,13 +281,14 @@ if not has_data:
 
     st.markdown("---")
     st.info(
-        "👈 **Upload a BTC CSV file** in the sidebar to get started.\n\n"
+        "Upload a BTC CSV file in the sidebar to get started.\n\n"
         "Expected format: Kaggle Bitcoin dataset with Date + OHLC columns."
     )
     st.stop()
 
 
 if uploaded_file is not None:
+    # Read the uploaded bytes once, then let Streamlit cache the parsed DataFrame.
     uploaded_file_bytes = uploaded_file.getvalue()
     raw_df = cached_load(uploaded_file_bytes, uploaded_file.name)
 elif use_sample:
@@ -278,14 +300,15 @@ else:
 
 
 try:
+    # Support common Kaggle naming like Date / Timestamp and Close / Open / High / Low.
     date_col, price_cols = detect_columns(raw_df)
 except ValueError as error:
-    st.error(f"❌ Column detection failed: {error}")
+    st.error(f"Column detection failed: {error}")
     st.stop()
 
 
 with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
+    st.markdown("### Configuration")
 
     price_col_select = st.selectbox(
         "Price Column",
@@ -294,7 +317,7 @@ with st.sidebar:
         help="Which price to forecast (Close is most common)",
     )
 
-    st.markdown("### 🤖 Models & Hyperparameters")
+    st.markdown("### Models")
     selected_models = st.multiselect(
         "Select models to compare:",
         options=["ARIMA", "Prophet", "XGBoost"],
@@ -319,15 +342,26 @@ with st.sidebar:
         help="Width of the prediction confidence band",
     ) / 100.0
 
-    generate_forecast = st.button(
-        "Generate Forecast",
-        type="primary",
-        use_container_width=True,
-        help="Create the future forecast using the models trained on the current settings",
+    st.markdown("### Technical Indicators")
+    show_sma = st.checkbox(
+        "Show SMA",
+        value=False,
+        help="Adds a simple moving average line to the main forecast chart",
+    )
+    show_ema = st.checkbox(
+        "Show EMA",
+        value=False,
+        help="Adds an exponential moving average line to the main forecast chart",
+    )
+    moving_average_window = st.select_slider(
+        "Moving Average Window",
+        options=[7, 14, 20, 30, 50],
+        value=20,
+        disabled=not (show_sma or show_ema),
     )
 
     st.markdown("---")
-    st.markdown("### 📅 Training Date Range")
+    st.markdown("### Training Date Range")
 
     temp_dates = pd.to_datetime(raw_df[date_col], infer_datetime_format=True, utc=True)
     temp_dates = temp_dates.dt.tz_localize(None)
@@ -340,14 +374,21 @@ with st.sidebar:
         max_value=max_date,
         value=(min_date, max_date),
         format="YYYY-MM-DD",
-        help="Model trains ONLY on data within this range",
+        help="Model trains only on data within this range",
     )
 
-    st.caption(f"📊 Dataset: **{min_date}** to **{max_date}** ({(max_date - min_date).days} days)")
+    st.caption(f"Dataset: **{min_date}** to **{max_date}** ({(max_date - min_date).days} days)")
+
+    generate_forecast = st.button(
+        "Generate Forecast",
+        type="primary",
+        use_container_width=True,
+        help="Train the selected models and generate the forecast output",
+    )
 
 
 if not selected_models:
-    st.warning("⚠️ Please select at least one model from the sidebar.")
+    st.warning("Please select at least one model from the sidebar.")
     st.stop()
 
 if uploaded_file is not None:
@@ -355,252 +396,264 @@ if uploaded_file is not None:
 else:
     source_key = ("sample", SAMPLE_DATA_PATH)
 
-training_config = (
+# The stored config lets us reuse the last finished run until a real input changes.
+run_config = (
     source_key,
     price_col_select,
     tuple(selected_models),
+    forecast_horizon,
     confidence_level,
     tuple(str(value) for value in date_range),
 )
 
-forecast_config = training_config + (forecast_horizon,)
-
-if st.session_state.get("training_config") != training_config:
-    st.session_state["training_config"] = training_config
-    st.session_state["training_bundle"] = None
-    st.session_state["forecast_config"] = None
-    st.session_state["forecast_requested"] = False
-    st.session_state["forecasts"] = {}
-
-if st.session_state.get("forecast_config") != forecast_config:
-    st.session_state["forecast_config"] = forecast_config
-    st.session_state["forecasts"] = {}
+if st.session_state.get("run_config") != run_config:
+    # Changing any training input should invalidate the previous trained models and forecast.
+    st.session_state["run_config"] = run_config
+    st.session_state["run_bundle"] = None
     st.session_state["forecast_requested"] = False
 
 forecast_requested = st.session_state.get("forecast_requested", False)
 
-with st.spinner("🔄 Preprocessing data..."):
-    df = preprocess(
-        raw_df,
-        date_col,
-        price_col_select,
-        start_date=pd.Timestamp(date_range[0]),
-        end_date=pd.Timestamp(date_range[1]),
-    )
+if generate_forecast:
+    st.session_state["forecast_requested"] = True
+    st.session_state["run_bundle"] = None
+    forecast_requested = True
 
-if len(df) < 60:
-    st.error(f"❌ Only {len(df)} data points in selected range. Need at least 60 for reliable modeling.")
+if not forecast_requested:
+    # Wait for an explicit run so the page can be configured first without doing any expensive work.
+    st.info("Upload the data, choose the settings you want, then click **Generate Forecast** to train the models and create the forecast.")
     st.stop()
 
 
-st.markdown('<p class="section-header">📊 Dataset Overview</p>', unsafe_allow_html=True)
+run_bundle = st.session_state.get("run_bundle")
 
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Data Points", f"{len(df):,}")
-with col2:
-    st.metric("Date Range", f"{df['ds'].iloc[0].strftime('%Y-%m-%d')} → {df['ds'].iloc[-1].strftime('%Y-%m-%d')}")
-with col3:
-    st.metric(f"Latest {price_col_select}", f"${df['y'].iloc[-1]:,.2f}")
-with col4:
-    pct_change = ((df["y"].iloc[-1] / df["y"].iloc[0]) - 1) * 100
-    st.metric("Total Change", f"{pct_change:+.1f}%")
+if run_bundle is None:
+    # First run for this exact setup: preprocess the data, backtest the models, then build the future forecast.
+    with st.spinner("Preprocessing data..."):
+        df = preprocess(
+            raw_df,
+            date_col,
+            price_col_select,
+            start_date=pd.Timestamp(date_range[0]),
+            end_date=pd.Timestamp(date_range[1]),
+        )
 
+    if len(df) < 60:
+        st.error(f"Only {len(df)} data points in the selected range. Need at least 60 for reliable modeling.")
+        st.stop()
 
-train_df, test_df = train_test_split_ts(df, test_ratio=0.2)
-train_feat = engineer_features(train_df)
-confidence = confidence_level
+    st.markdown('<p class="section-header">Dataset Overview</p>', unsafe_allow_html=True)
 
-st.caption(f"🔀 Train: {len(train_df)} points | Test: {len(test_df)} points (80/20 split, chronological)")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Data Points", f"{len(df):,}")
+    with col2:
+        st.metric("Date Range", f"{df['ds'].iloc[0].strftime('%Y-%m-%d')} to {df['ds'].iloc[-1].strftime('%Y-%m-%d')}")
+    with col3:
+        st.metric(f"Latest {price_col_select}", f"${df['y'].iloc[-1]:,.2f}")
+    with col4:
+        pct_change = ((df["y"].iloc[-1] / df["y"].iloc[0]) - 1) * 100
+        st.metric("Total Change", f"{pct_change:+.1f}%")
 
+    train_df, test_df = train_test_split_ts(df, test_ratio=0.2)
+    train_feat = engineer_features(train_df)
+    confidence = confidence_level
 
-st.markdown('<p class="section-header">🤖 Model Training</p>', unsafe_allow_html=True)
+    st.caption(f"Train: {len(train_df)} points | Test: {len(test_df)} points (80/20 split, chronological)")
+    st.markdown('<p class="section-header">Model Training</p>', unsafe_allow_html=True)
 
-training_bundle = st.session_state.get("training_bundle")
-
-if training_bundle is None:
     results = {}
-    forecast_models = {}
+    forecasts = {}
     full_features = engineer_features(df) if "XGBoost" in selected_models else None
 
     progress_bar = st.progress(0, text="Training models...")
     total_models = len(selected_models)
 
     for index, model_name in enumerate(selected_models):
+        # Each model is scored on the held-out test split first, then refit on the full window for the final forecast.
         progress_bar.progress(
             index / total_models,
             text=f"Training {model_name}... ({index + 1}/{total_models})",
         )
 
-        with st.spinner(f"⏳ Training **{model_name}**..."):
+        with st.spinner(f"Training {model_name}..."):
             try:
                 if model_name == "ARIMA":
                     model = ARIMAModel()
                     backtest_result = model.backtest(train_df, test_df, confidence)
-
-                    forecast_model = ARIMAModel()
-                    forecast_model.fit(df)
-
+                    model.fit(df)
+                    future_forecast = model.predict(forecast_horizon, confidence)
+                    future_forecast["ds"] = pd.date_range(
+                        start=df["ds"].iloc[-1] + pd.Timedelta(days=1),
+                        periods=forecast_horizon,
+                        freq="D",
+                    )
                 elif model_name == "Prophet":
                     model = ProphetModel()
                     backtest_result = model.backtest(train_df, test_df, confidence)
-
-                    forecast_model = ProphetModel()
-                    forecast_model.fit(df, confidence)
-
+                    model.fit(df, confidence)
+                    future_forecast = model.predict(forecast_horizon, confidence)
                 elif model_name == "XGBoost":
                     model = XGBoostModel()
                     backtest_result = model.backtest(train_df, test_df, train_feat, confidence)
-
-                    forecast_model = XGBoostModel()
-                    forecast_model.fit(full_features, confidence)
-
+                    model.fit(full_features, confidence)
+                    future_forecast = model.predict_recursive(df, forecast_horizon)
                 else:
                     continue
 
                 results[model_name] = backtest_result
                 results[model_name]["model_obj"] = model
-                forecast_models[model_name] = forecast_model
-
+                forecasts[model_name] = future_forecast
             except Exception as error:
-                st.error(f"❌ {model_name} failed: {str(error)}")
+                st.error(f"{model_name} failed: {str(error)}")
                 continue
 
-    progress_bar.progress(1.0, text="✅ All models trained!")
-    training_bundle = {
+    progress_bar.progress(1.0, text="All models trained.")
+
+    if not results:
+        st.error("No models completed successfully. Check your data and try again.")
+        st.stop()
+
+    run_bundle = {
+        "df": df,
+        "train_df": train_df,
+        "test_df": test_df,
         "results": results,
-        "forecast_models": forecast_models,
+        "forecasts": forecasts,
     }
-    st.session_state["training_bundle"] = training_bundle
+    st.session_state["run_bundle"] = run_bundle
 else:
-    st.caption("Using the already trained models for the current upload and settings.")
+    # Reuse the finished run when only display settings change, such as toggling SMA / EMA overlays.
+    df = run_bundle["df"]
+    train_df = run_bundle["train_df"]
+    test_df = run_bundle["test_df"]
+    results = run_bundle["results"]
+    forecasts = run_bundle["forecasts"]
 
-results = training_bundle["results"]
+    st.markdown('<p class="section-header">Dataset Overview</p>', unsafe_allow_html=True)
 
-if not results:
-    st.error("❌ No models completed successfully. Check your data and try again.")
-    st.stop()
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Data Points", f"{len(df):,}")
+    with col2:
+        st.metric("Date Range", f"{df['ds'].iloc[0].strftime('%Y-%m-%d')} to {df['ds'].iloc[-1].strftime('%Y-%m-%d')}")
+    with col3:
+        st.metric(f"Latest {price_col_select}", f"${df['y'].iloc[-1]:,.2f}")
+    with col4:
+        pct_change = ((df["y"].iloc[-1] / df["y"].iloc[0]) - 1) * 100
+        st.metric("Total Change", f"{pct_change:+.1f}%")
 
-if generate_forecast:
-    forecast_models = training_bundle["forecast_models"]
-    forecasts = {}
-
-    with st.spinner("📈 Generating forecast..."):
-        for model_name in selected_models:
-            if model_name not in forecast_models:
-                continue
-
-            model = forecast_models[model_name]
-
-            if model_name == "ARIMA":
-                future_forecast = model.predict(forecast_horizon, confidence)
-                future_forecast["ds"] = pd.date_range(
-                    start=df["ds"].iloc[-1] + pd.Timedelta(days=1),
-                    periods=forecast_horizon,
-                    freq="D",
-                )
-            elif model_name == "Prophet":
-                future_forecast = model.predict(forecast_horizon, confidence)
-            elif model_name == "XGBoost":
-                future_forecast = model.predict_recursive(df, forecast_horizon)
-            else:
-                continue
-
-            forecasts[model_name] = future_forecast
-
-    st.session_state["forecasts"] = forecasts
-    st.session_state["forecast_requested"] = True
-    forecast_requested = True
-
-forecasts = st.session_state.get("forecasts", {})
+    st.caption(f"Train: {len(train_df)} points | Test: {len(test_df)} points (80/20 split, chronological)")
+    st.markdown('<p class="section-header">Model Training</p>', unsafe_allow_html=True)
+    st.caption("Using the already generated forecast for the current upload and settings.")
 
 
-st.markdown('<p class="section-header">📈 Forecast Chart</p>', unsafe_allow_html=True)
-if forecast_requested:
-    fig_main = go.Figure()
+st.markdown('<p class="section-header">Forecast Chart</p>', unsafe_allow_html=True)
+
+# Main chart = full history plus the selected model forecasts into the future.
+fig_main = go.Figure()
+fig_main.add_trace(
+    go.Scatter(
+        x=df["ds"],
+        y=df["y"],
+        mode="lines",
+        name="Historical Price",
+        line=dict(color="#ffffff", width=2),
+        opacity=0.8,
+    )
+)
+
+# SMA and EMA here are visual overlays only; they are not fed into the forecast step from the UI.
+add_moving_average_traces(fig_main, df, show_sma, show_ema, moving_average_window)
+
+split_date = test_df["ds"].iloc[0]
+split_str = str(split_date)
+first_forecast_date = next(iter(forecasts.values()))["ds"].iloc[0]
+forecast_start_str = str(first_forecast_date)
+
+fig_main.update_layout(
+    shapes=[
+        dict(
+            type="line",
+            x0=split_str,
+            x1=split_str,
+            y0=0,
+            y1=1,
+            yref="paper",
+            line=dict(color="#888", width=1.5, dash="dash"),
+        ),
+        dict(
+            type="line",
+            x0=forecast_start_str,
+            x1=forecast_start_str,
+            y0=0,
+            y1=1,
+            yref="paper",
+            line=dict(color="#ffd700", width=2, dash="dot"),
+        ),
+    ],
+    annotations=[
+        dict(
+            x=split_str,
+            y=1.05,
+            yref="paper",
+            text="Train | Test",
+            showarrow=False,
+            font=dict(color="#888", size=11),
+        ),
+        dict(
+            x=forecast_start_str,
+            y=1.1,
+            yref="paper",
+            text="Forecast Start",
+            showarrow=False,
+            font=dict(color="#ffd700", size=11),
+        ),
+    ],
+)
+
+for model_name in selected_models:
+    if model_name not in forecasts:
+        continue
+
+    forecast_df = forecasts[model_name]
+    line_color = MODEL_COLORS.get(model_name, "#fff")
+    fill_color = MODEL_COLORS_RGBA.get(model_name, "rgba(255,255,255,0.1)")
+
+    add_confidence_band(
+        fig_main,
+        forecast_df["ds"],
+        forecast_df["yhat_lower"],
+        forecast_df["yhat_upper"],
+        fill_color,
+        f"{model_name} Upper CI",
+        f"{model_name} Lower CI",
+    )
     fig_main.add_trace(
         go.Scatter(
-            x=df["ds"],
-            y=df["y"],
+            x=forecast_df["ds"],
+            y=forecast_df["yhat"],
             mode="lines",
-            name="Historical Price",
-            line=dict(color="#ffffff", width=2),
-            opacity=0.8,
+            name=f"{model_name} Forecast",
+            line=dict(color=line_color, width=2.5, dash="dot"),
         )
     )
 
-    # add_vline can be a little inconsistent with timestamps, so a manual line is safer here
-    split_date = test_df["ds"].iloc[0]
-    split_str = str(split_date)
-    fig_main.update_layout(
-        shapes=[
-            dict(
-                type="line",
-                x0=split_str,
-                x1=split_str,
-                y0=0,
-                y1=1,
-                yref="paper",
-                line=dict(color="#888", width=1.5, dash="dash"),
-            )
-        ],
-        annotations=[
-            dict(
-                x=split_str,
-                y=1.05,
-                yref="paper",
-                text="Train | Test",
-                showarrow=False,
-                font=dict(color="#888", size=11),
-            )
-        ],
-    )
+fig_main.update_layout(
+    **create_plotly_layout(f"BTC {price_col_select} Price - {forecast_horizon}-Day Forecast")
+)
 
-    for model_name in selected_models:
-        if model_name not in forecasts:
-            continue
-
-        forecast_df = forecasts[model_name]
-        line_color = MODEL_COLORS.get(model_name, "#fff")
-        fill_color = MODEL_COLORS_RGBA.get(model_name, "rgba(255,255,255,0.1)")
-
-        add_confidence_band(
-            fig_main,
-            forecast_df["ds"],
-            forecast_df["yhat_lower"],
-            forecast_df["yhat_upper"],
-            fill_color,
-            f"{model_name} Upper CI",
-            f"{model_name} Lower CI",
-        )
-        fig_main.add_trace(
-            go.Scatter(
-                x=forecast_df["ds"],
-                y=forecast_df["yhat"],
-                mode="lines",
-                name=f"{model_name} Forecast",
-                line=dict(color=line_color, width=2.5, dash="dot"),
-            )
-        )
-
-    fig_main.update_layout(
-        **create_plotly_layout(f"BTC {price_col_select} Price — {forecast_horizon}-Day Forecast")
-    )
-
-    st.plotly_chart(fig_main, use_container_width=True)
-else:
-    st.info("Training and backtesting are already done. Click **Generate Forecast** in the sidebar to create the future forecast.")
+st.plotly_chart(fig_main, use_container_width=True)
 
 
-st.markdown('<p class="section-header">🔥 Model Competition — Test Set</p>', unsafe_allow_html=True)
-st.caption("All models evaluated on the same held-out test set. Toggle models on/off in the legend.")
+st.markdown('<p class="section-header">Model Competition - Test Set</p>', unsafe_allow_html=True)
+# This second chart is only for backtest comparison on the held-out test window.
+st.caption("All models are evaluated on the same held-out test set. Toggle models on and off in the legend.")
 
 fig_comp = go.Figure()
-test_dates = test_df["ds"].values
-
 fig_comp.add_trace(
     go.Scatter(
-        x=test_dates,
+        x=test_df["ds"].values,
         y=test_df["y"].values,
         mode="lines",
         name="Actual Price",
@@ -636,13 +689,13 @@ for model_name in selected_models:
     )
 
 fig_comp.update_layout(
-    **create_plotly_layout("Model Competition — Predictions vs. Actual on Test Set")
+    **create_plotly_layout("Model Competition - Predictions vs. Actual on Test Set")
 )
 
 st.plotly_chart(fig_comp, use_container_width=True)
 
 
-st.markdown('<p class="section-header">🏆 Results & Winner</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-header">Results and Winner</p>', unsafe_allow_html=True)
 
 comparison_df = compare_models(results)
 winner_name = select_winner(results)
@@ -707,7 +760,7 @@ fig_bar.add_trace(
 )
 
 fig_bar.update_layout(
-    title=dict(text="Model Comparison — Error Metrics", font=dict(size=18, color="#e94560")),
+    title=dict(text="Model Comparison - Error Metrics", font=dict(size=18, color="#e94560")),
     template="plotly_dark",
     paper_bgcolor="#0a0a1a",
     plot_bgcolor="#0a0a1a",
@@ -720,13 +773,13 @@ fig_bar.update_layout(
 st.plotly_chart(fig_bar, use_container_width=True)
 
 
-st.markdown('<p class="section-header">🔍 Model Details</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-header">Model Details</p>', unsafe_allow_html=True)
 
 for model_name in selected_models:
     if model_name not in results:
         continue
 
-    with st.expander(f"📋 {model_name} — Details & Parameters", expanded=False):
+    with st.expander(f"{model_name} - Details and Parameters", expanded=False):
         model_obj = results[model_name].get("model_obj")
         if model_obj:
             st.markdown(model_obj.get_info())
@@ -764,7 +817,7 @@ st.markdown("---")
 st.markdown(
     """
 <div style="text-align: center; color: #555; font-size: 13px; padding: 16px 0;">
-    <p>🛈 About<br>
+    <p>About<br>
     Built with Streamlit + Plotly.<br><br>
     Models: ARIMA (pmdarima), Prophet, XGBoost.<br><br>
     Main paper used in this project:<br>
